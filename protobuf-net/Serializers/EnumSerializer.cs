@@ -1,5 +1,6 @@
 ﻿#if !NO_RUNTIME
 using System;
+using System.Diagnostics.Eventing.Reader;
 using ProtoBuf.Meta;
 
 #if FEAT_IKVM
@@ -66,63 +67,98 @@ namespace ProtoBuf.Serializers
         bool IProtoSerializer.ReturnsValue { get { return true; } }
 
 #if !FEAT_IKVM
-        private int EnumToWire(object value)
+        private object EnumToWire(object value, out bool isInt64)
         {
             unchecked
             {
+                isInt64 = false;
                 switch (GetTypeCode())
                 { // unbox then convert to int
-                    case ProtoTypeCode.Byte: return (int)(byte)value;
-                    case ProtoTypeCode.SByte: return (int)(sbyte)value;
-                    case ProtoTypeCode.Int16: return (int)(short)value;
-                    case ProtoTypeCode.Int32: return (int)value;
-                    case ProtoTypeCode.Int64: return (int)(long)value;
-                    case ProtoTypeCode.UInt16: return (int)(ushort)value;
-                    case ProtoTypeCode.UInt32: return (int)(uint)value;
-                    case ProtoTypeCode.UInt64: return (int)(ulong)value;
+                    case ProtoTypeCode.Byte: return (byte)value;
+                    case ProtoTypeCode.SByte: return (sbyte)value;
+                    case ProtoTypeCode.Int16: return (short)value;
+                    case ProtoTypeCode.Int32: return value;
+                    case ProtoTypeCode.Int64: return (long)value;
+                    case ProtoTypeCode.UInt16: return (ushort)value;
+                    case ProtoTypeCode.UInt32: return (uint)value;
+                    case ProtoTypeCode.UInt64:
+                        isInt64 = true;
+                        return (ulong)value;
                     default: throw new InvalidOperationException();
                 }
             }
         }
-        private object WireToEnum(int value)
+        private object WireToEnum(object value)
         {
             unchecked
             {
                 switch (GetTypeCode())
                 { // convert from int then box 
-                    case ProtoTypeCode.Byte: return Enum.ToObject(enumType, (byte)value);
-                    case ProtoTypeCode.SByte: return Enum.ToObject(enumType, (sbyte)value);
-                    case ProtoTypeCode.Int16: return Enum.ToObject(enumType, (short)value);
-                    case ProtoTypeCode.Int32: return Enum.ToObject(enumType, value);
+                    case ProtoTypeCode.Byte: return Enum.ToObject(enumType, (byte)(int)value);
+                    case ProtoTypeCode.SByte: return Enum.ToObject(enumType, (sbyte)(int)value);
+                    case ProtoTypeCode.Int16: return Enum.ToObject(enumType, (short)(int)value);
+                    case ProtoTypeCode.Int32: return Enum.ToObject(enumType, (int)value);
                     case ProtoTypeCode.Int64: return Enum.ToObject(enumType, (long)value);
-                    case ProtoTypeCode.UInt16: return Enum.ToObject(enumType, (ushort)value);
-                    case ProtoTypeCode.UInt32: return Enum.ToObject(enumType, (uint)value);
+                    case ProtoTypeCode.UInt16: return Enum.ToObject(enumType, (ushort)(int)value);
+                    case ProtoTypeCode.UInt32: return Enum.ToObject(enumType, (uint)(int)value);
                     case ProtoTypeCode.UInt64: return Enum.ToObject(enumType, (ulong)value);
                     default: throw new InvalidOperationException();
                 }
             }
         }
 
+        //Proryv
         public object Read(object value, ProtoReader source)
         {
             Helpers.DebugAssert(value == null); // since replaces
-            int wireValue = source.ReadInt32();
+
+            var typeCode = GetTypeCode();
+            object wireValue;
+            switch (typeCode)
+            {
+                case ProtoTypeCode.UInt64:
+                    wireValue = source.ReadUInt64();
+                    break;
+                case ProtoTypeCode.Int64:
+                    wireValue = source.ReadInt64();
+                    break;
+                default:
+                    wireValue = source.ReadInt32();
+                    break;
+            }
+
+            //int wireValue = source.ReadInt32();
             if(map == null) {
                 return WireToEnum(wireValue);
             }
             for(int i = 0 ; i < map.Length ; i++) {
-                if(map[i].WireValue == wireValue) {
+                //Если будет падать приведение, то вместо (int)wireValue приводить так Convert.ToInt32(wireValue)
+                if(map[i].WireValue == (int)wireValue) {
                     return map[i].TypedValue;
                 }
             }
-            source.ThrowEnumException(ExpectedType, wireValue);
+            source.ThrowEnumException(ExpectedType, (int)wireValue);
             return null; // to make compiler happy
         }
+
+        //Proryv
         public void Write(object value, ProtoWriter dest)
         {
             if (map == null)
             {
-                ProtoWriter.WriteInt32(EnumToWire(value), dest);
+                var typeCode = GetTypeCode();
+                switch (typeCode)
+                {
+                    case ProtoTypeCode.UInt64:
+                        ProtoWriter.WriteUInt64((ulong) value, dest);
+                        break;
+                    case ProtoTypeCode.Int64:
+                        ProtoWriter.WriteInt64((long)value, dest);
+                        break;
+                    default:
+                        ProtoWriter.WriteInt32(Convert.ToInt32(value), dest);
+                        break;
+                }
             }
             else
             {
